@@ -1,0 +1,5 @@
+# Everything in this repo has genuinely been run against these real
+# dependencies - see docs/incidents.md for the full install process,
+# including a real system-package conflict that needed --ignore-installed.
+pyrit>=1.1.0
+anthropic>=0.40.0

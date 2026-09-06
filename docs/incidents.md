@@ -123,6 +123,65 @@ built end to end; it is the right moment to build toward Tier 2's
 larger, more adversarial testing, not a basis for declaring the
 classifier definitively robust.
 
+## 9. Tier 2 obfuscation testing: a real crash, a genuinely unexpected upstream discovery, and an honest breakdown that complicates a clean "100%"
+
+Built against five real PyRIT converters (`Base64Converter`,
+`LeetspeakConverter`, `CaesarConverter`, `CharSwapConverter`,
+`AsciiSmugglerConverter` — the last implementing a specific published
+technique, Unicode tag smuggling, not a generic "encoding" idea),
+testing whether obfuscating a known-bad prompt lets it evade a
+classifier that correctly caught the same prompt in plain text.
+
+**Verified against a deliberately naive mock first**: a plain
+keyword-matching classifier was almost completely defeated (0%
+detection for Base64, Leetspeak, Caesar cipher, and ASCII smuggling) —
+confirming the test pipeline itself correctly surfaces real
+obfuscation-based bypasses when they genuinely exist, before trusting
+any result against the real system.
+
+**Running against Project 7's real classifier crashed immediately**
+with `IndexError: list index out of range` on `response.content[0]`.
+Investigated directly rather than patched blind: a standalone debug
+script printing the full raw Anthropic response revealed
+`stop_reason: 'refusal'` with `category: 'bio'` — Anthropic's own
+upstream safety layer refusing to process 10 of 15 obfuscated inputs
+entirely, before Project 7's own classification prompt ever ran, on
+content with no biological subject matter at all. The most plausible
+explanation: heavy obfuscation of text is itself a pattern associated
+with attempts to evade downstream content filtering, independent of
+what the underlying obfuscated content actually says — Anthropic's
+safety classifier flagging the *technique*, not necessarily the
+*content*. Fixed by explicitly handling an empty `response.content` as
+its own case, distinctly labeled `"UPSTREAM REFUSAL"` rather than
+silently folded into either "safe" or "our classifier judged this
+injection."
+
+**The clean run (15/15, 0 bypasses) required one more honest
+breakdown before it meant what it appeared to mean**: of the 15
+"caught" cases, only **5 were Project 7's own classifier correctly
+reasoning about obfuscated content** — the remaining 10 were
+Anthropic's upstream refusal intercepting the input before Project 7's
+logic ever ran. Notably, `char_swap` (a noisy but still largely
+human-readable obfuscation) was the only technique where every case
+reached and was correctly judged by Project 7's own classifier
+specifically; the other four techniques were mostly caught upstream
+instead. A bare "100%, zero bypasses" headline would have been
+technically true but materially overstated what this specific
+project's own code actually demonstrated.
+
+This surfaces a genuine, senior-level insight worth naming plainly:
+red-teaming any system built on a hosted LLM API cannot always cleanly
+separate "this system's own behavior" from "the underlying provider's
+independent safety layer" — not a flaw in this project's test design,
+but an honest, accurate account of how testing against managed AI
+infrastructure actually works. A related, smaller observation: the
+same obfuscated input did not always produce the same upstream-vs-
+downstream split across separate runs (Leetspeak's outcome shifted
+between an earlier diagnostic run and the final one) — a real,
+practical reminder that testing against a live, non-deterministic
+hosted model means identical inputs can genuinely produce different
+outcomes run to run.
+
 ## What's verified, and what genuinely isn't yet
 
 The full pipeline — a real PyRIT `PromptTarget`, a real taxonomy-based
@@ -133,10 +192,19 @@ and once against Project 7's actual, live, Claude-API-backed
 classifier (confirming the real system under test). Both runs are
 genuine, not assumed.
 
+As of incident #9, Tier 2's obfuscation-testing component (real PyRIT
+converters, run against the real classifier) is also genuinely
+complete — with the honest caveat that only 5 of 15 "caught" cases
+reflect Project 7's own classifier logic specifically, the rest being
+Anthropic's upstream safety layer.
+
 What's explicitly NOT yet built, stated plainly:
-- **Tier 2** (multi-turn exploits, PyRIT's `converter` module for
-  encoding/obfuscation-based jailbreaks, a larger and versioned
-  red-team dataset) — not started.
+- **Tier 2's remaining pieces**: multi-turn exploits via PyRIT's real
+  `CrescendoAttack` (confirmed to require a second, separate
+  adversarial-generator model, deliberately deferred pending explicit
+  cost confirmation given the real API-call volume involved), and a
+  larger, versioned red-team dataset beyond the current small,
+  hand-curated set.
 - **Tier 3** (autonomous agent safety testing against Project 7's
   actual orchestrator/planner, custom security harness work) — not
   started.
@@ -145,3 +213,7 @@ What's explicitly NOT yet built, stated plainly:
   real evaluation claim.
 - Testing against Project 5's RAG platform specifically (only Project
   7's classifier has been targeted so far).
+- A more rigorous way to isolate Project 7's own classifier behavior
+  from Anthropic's upstream safety layer specifically, given incident
+  #9 confirmed the two are difficult to cleanly separate when testing
+  obfuscated inputs.

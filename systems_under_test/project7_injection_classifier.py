@@ -3,26 +3,34 @@ systems_under_test/project7_injection_classifier.py
 
 The exact, real llm_injection_classifier function from Project 7
 (multi-agent-security-platform/guardrails/injection_screening.py),
-copied here verbatim — not reimplemented — following the same pattern
-Project 7 itself used when reusing Project 6's visibility.py: these
-are independently deployable projects, so the actual system-under-test
-code is copied rather than creating a live cross-repo import
-dependency. If Project 7's real classifier is ever updated, this copy
-needs to be updated too — a real, explicit maintenance responsibility,
-not a hidden one.
+copied here verbatim per the pattern explained in
+docs/incidents.md #... — see that file for the full reasoning.
 
-This is the actual target this whole Entry-tier test suite is
-attacking — not a reimplementation, not a simulation.
+UPDATED after a real, substantive finding from Tier 2 obfuscation
+testing: heavily-obfuscated inputs (Base64, Caesar cipher, Unicode
+smuggling) can trigger a hard REFUSAL at Anthropic's own upstream
+safety-classification layer — before this function's own prompt-
+injection logic ever runs — confirmed via `response.stop_reason ==
+"refusal"` with a specific category (observed: 'bio', on prompts with
+no biological content at all; almost certainly because heavy
+obfuscation itself is a pattern associated with attempts to evade
+downstream filtering, independent of this project's own classifier).
+The original version of this function crashed with IndexError on
+`response.content[0]` when this happened, since `response.content` is
+genuinely empty in this case. See docs/incidents.md for the full
+account of how this was found and why the fix treats an upstream
+refusal as "caught" (not a clean SAFE bypass) while still being
+explicit that this is a DIFFERENT signal than the classifier's own
+judgment.
 """
 
 import os
 
 
 def llm_injection_classifier(text: str):
-    """Identical to Project 7's real function. Asks Claude directly
-    whether the given text contains an attempt to inject instructions
-    targeting an AI agent reading it, as opposed to being ordinary
-    threat-intel content that merely discusses such techniques."""
+    """Identical to Project 7's real function, with one addition:
+    explicit handling of an upstream refusal (empty response.content),
+    which the original version did not anticipate and would crash on."""
     import anthropic
 
     client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
@@ -47,6 +55,18 @@ Document to screen:
         messages=[{"role": "user", "content": prompt}],
         extra_headers={"anthropic-workspace-id": workspace_id} if workspace_id else {},
     )
+
+    # A real, confirmed case Project 7's original version never
+    # anticipated: Anthropic's own upstream safety layer can refuse to
+    # process an input entirely (empty content, stop_reason="refusal"),
+    # BEFORE our own classification prompt ever gets a chance to run.
+    # Treated as "caught" — the obfuscated attempt did NOT get a clean
+    # SAFE verdict, which is the actual bypass condition being tested
+    # for — but explicitly labeled as a different kind of signal than
+    # this classifier's own judgment, not silently conflated with it.
+    if not response.content:
+        category = getattr(response.stop_details, "category", "unknown") if response.stop_details else "unknown"
+        return True, f"UPSTREAM REFUSAL (not this classifier's own judgment): Anthropic's safety layer refused to process this input (category: {category})"
 
     result_text = response.content[0].text.strip()
     if result_text.upper().startswith("INJECTION"):

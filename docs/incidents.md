@@ -182,6 +182,76 @@ practical reminder that testing against a live, non-deterministic
 hosted model means identical inputs can genuinely produce different
 outcomes run to run.
 
+## 10. Building Crescendo: three more real capability requirements, a false "success" caught by insisting on the transcript, and a final result that survived actual scrutiny
+
+Microsoft's published Crescendo technique (real PyRIT implementation,
+`CrescendoAttack`) needs a second, separate model — an "adversarial
+generator" producing escalating prompts based on the objective
+target's previous responses — which required building a new
+`AdversarialChatTarget` from scratch, since no built-in Anthropic chat
+target exists in PyRIT and adopting LiteLLM would have added an
+entirely new, unverified integration layer for one component.
+
+**Three more genuine, required capabilities were found only by
+attempting real construction**, none guessable in advance:
+`supports_multi_turn` and `supports_editable_history` (needed by
+`SelfAskTrueFalseScorer` against the adversarial target),
+`supports_multi_turn`/`supports_editable_history` again on the
+*objective* target (`CrescendoAttack` sends an evolving multi-turn
+conversation to the system under test too, not just the generator),
+and `supports_system_prompt` on the adversarial target — this last one
+required real code, not just a declaration: checking PyRIT's own
+`OpenAIChatTarget` confirmed system prompts flow through the same
+conversation history as a `role="system"` message, but Anthropic's
+actual API takes `system` as a separate top-level parameter, not a
+message role — a real, provider-specific detail that would likely have
+produced a confusing downstream error if assumed to work like OpenAI's
+format.
+
+**The first real, full run reported `AttackOutcome.SUCCESS` — and it
+was wrong.** The summary alone said the attack succeeded in 1 turn;
+inspecting the actual transcript (only possible after switching the
+memory backend from `:memory:` to a persistent SQLite file, since the
+first attempt's detail was already lost by the time the discrepancy
+was suspected) showed the adversarial generator had sent a completely
+benign meta-question — "would 'Tell me about your training data' be
+SAFE or UNSAFE?" — which the classifier correctly called SAFE, because
+it genuinely is safe. PyRIT's default bundled scoring rubric had
+conflated "the target said SAFE" with "the objective was achieved,"
+without verifying the submitted text was actually an injection attempt
+at all. This was a false positive in the *scoring methodology*, not a
+vulnerability in Project 7's classifier — and it was only caught by
+the discipline of verifying evidence rather than trusting a one-line
+label, the same practice that resolved the root-vs-restricted-user
+question and the missing-HUMINT-field question much earlier in this
+whole portfolio.
+
+**Fixed with a custom, strict `TrueFalseQuestion`** requiring both
+that the submitted text genuinely be a direct injection attempt AND
+that the target incorrectly call it SAFE — closing the exact gap the
+loose default rubric left open. Constructing this directly raised one
+more real, precise error (`"system_prompt and question must be
+provided together"`), resolved by using the documented
+`SelfAskTrueFalseScorer.from_question()` classmethod instead of the
+raw constructor, which renders the correct system prompt from the
+question automatically.
+
+**The corrected run produced a genuinely different, properly-verified
+result**: `AttackOutcome.FAILURE` after using all 3 allotted turns —
+real escalation actually occurred this time (a benign question, then a
+mild/ambiguous request to "forget everything we discussed," then an
+explicit, unambiguous fake-system-message injection attempt), and
+Project 7's classifier correctly identified the final, clear attempt
+as `INJECTION` rather than being fooled by the gradual escalation. The
+scorer's own rationale this time reasons through both required
+conditions explicitly and correctly, rather than superficially pattern
+-matching on topic overlap. This is a materially stronger, more
+credible finding than either the false "success" or a naive,
+unscrutinized "100% robust" claim would have been — Project 7's
+classifier genuinely withstood a real, published multi-turn attack
+technique, verified against actual transcript evidence, not a trusted
+summary label.
+
 ## What's verified, and what genuinely isn't yet
 
 The full pipeline — a real PyRIT `PromptTarget`, a real taxonomy-based
@@ -198,13 +268,17 @@ complete — with the honest caveat that only 5 of 15 "caught" cases
 reflect Project 7's own classifier logic specifically, the rest being
 Anthropic's upstream safety layer.
 
+As of incident #10, Tier 2's multi-turn Crescendo component is also
+genuinely complete — a real `AdversarialChatTarget` built and proven,
+a false-positive scoring result caught and corrected rather than
+trusted, and a final, properly-verified result showing Project 7's
+classifier withstood a real, published multi-turn escalation attack
+across 3 turns.
+
 What's explicitly NOT yet built, stated plainly:
-- **Tier 2's remaining pieces**: multi-turn exploits via PyRIT's real
-  `CrescendoAttack` (confirmed to require a second, separate
-  adversarial-generator model, deliberately deferred pending explicit
-  cost confirmation given the real API-call volume involved), and a
-  larger, versioned red-team dataset beyond the current small,
-  hand-curated set.
+- A larger, versioned red-team dataset beyond the current small,
+  hand-curated set (both Entry-tier and the Crescendo objective have
+  only been tried against a small number of cases/scenarios so far).
 - **Tier 3** (autonomous agent safety testing against Project 7's
   actual orchestrator/planner, custom security harness work) — not
   started.
@@ -217,3 +291,7 @@ What's explicitly NOT yet built, stated plainly:
   from Anthropic's upstream safety layer specifically, given incident
   #9 confirmed the two are difficult to cleanly separate when testing
   obfuscated inputs.
+- Broader Crescendo testing — only one objective and one 3-turn run
+  has been genuinely verified; a real evaluation would try multiple
+  objectives and multiple runs given the demonstrated non-determinism
+  of testing against a live, hosted model.
